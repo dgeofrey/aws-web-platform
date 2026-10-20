@@ -1,3 +1,13 @@
+output "app_url" {
+  description = "URL of the application."
+  value       = module.web.app_url
+}
+
+output "autoscaling_group_name" {
+  description = "Name of the application Auto Scaling group."
+  value       = module.web.autoscaling_group_name
+}
+
 output "vpc_id" {
   description = "ID of the VPC."
   value       = module.vpc.vpc_id

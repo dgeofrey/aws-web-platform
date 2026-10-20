@@ -2,45 +2,60 @@
 
 [![terraform-ci](https://github.com/GITHUB_USERNAME/aws-web-platform/actions/workflows/terraform-ci.yml/badge.svg)](https://github.com/GITHUB_USERNAME/aws-web-platform/actions/workflows/terraform-ci.yml)
 
-Terraform for a multi-AZ web platform on AWS, built from reusable modules with one thin
-composition per environment.
+Highly available web tier on AWS, built with reusable Terraform modules: a multi-AZ VPC,
+an Application Load Balancer, and an Auto Scaling group of private EC2 instances with no
+inbound SSH. State is stored remotely in S3 with locking, and every change is checked in CI.
 
-## Current scope
-
-### Network foundation
-
-The `vpc` module provisions the network layer the rest of the platform builds on.
+## Architecture
 
 ```mermaid
 flowchart TB
-    igw[Internet Gateway]
+    user([Users]) -->|HTTP| alb
 
-    subgraph vpc["VPC — 10.20.0.0/16"]
-        subgraph az1["AZ a"]
-            pub1["Public 10.20.0.0/24"]
-            priv1["Private 10.20.10.0/24"]
+    subgraph vpc["VPC — 10.20.0.0/16 · 2 Availability Zones"]
+        subgraph public["Public subnets"]
+            alb[Application Load Balancer]
+            nat[NAT Gateway]
         end
-        subgraph az2["AZ b"]
-            pub2["Public 10.20.1.0/24"]
-            priv2["Private 10.20.11.0/24"]
+        subgraph private["Private subnets"]
+            asg["Auto Scaling group<br/>EC2 · Amazon Linux 2023 · nginx"]
         end
-        nat["NAT Gateway (optional)"]
     end
 
-    pub1 & pub2 --> igw
-    priv1 & priv2 -.-> nat --> igw
+    alb -->|port 80, ALB security group only| asg
+    asg -->|HTTPS egress only| nat --> igw[Internet Gateway]
+    ssm[SSM Session Manager] -.->|shell access, no SSH| asg
 ```
+
+## Components
+
+### Network — `modules/vpc`
 
 - **Public and private subnets in each Availability Zone.** CIDRs are derived with `cidrsubnet()`, so adding a zone never renumbers existing subnets.
 - **Subnets keyed by AZ name** (`for_each`, not `count`), so changing the zone count doesn't destroy and recreate unrelated subnets.
 - **Locked-down default security group.** All rules are removed, so nothing can attach to it by accident.
-- **Optional single NAT gateway** for private subnet egress. It's off by default in dev because it's billed hourly. Production would run one per AZ.
+- **Single NAT gateway** for private subnet egress, which keeps non-production cost down. Production would run one per AZ.
 - **Validated inputs** (CIDR size, zone count) and consistent tagging through provider `default_tags`.
 
-### Remote state
+### Web tier — `modules/web`
 
-Each environment stores its state in S3 rather than on a workstation, so state is durable,
-shared and protected from concurrent runs.
+**Security**
+
+- Instances live in **private subnets** and accept traffic **only from the load balancer's security group**. Egress is limited to HTTPS, for package repositories and SSM.
+- **No SSH and no key pairs.** Shell access goes through SSM Session Manager, via an instance role limited to `AmazonSSMManagedInstanceCore`.
+- **IMDSv2 enforced** with a hop limit of 1, which blocks SSRF-style credential theft from instance metadata.
+- **Encrypted gp3 root volumes**, and the load balancer drops invalid HTTP headers.
+- **Optional HTTPS:** passing an ACM certificate ARN adds a TLS 1.3 listener and redirects HTTP to HTTPS.
+
+**Reliability**
+
+- Instances are spread **across both Availability Zones** behind the load balancer.
+- **ELB health checks** against a dedicated `/health` endpoint, so failed instances are replaced automatically.
+- **Target tracking scaling** holds average CPU at 50%.
+- **Rolling instance refresh:** a new launch template version rolls out while keeping at least 50% of capacity healthy.
+- **AMI resolved from AWS's public SSM parameter,** so new instances always launch from the latest patched Amazon Linux 2023 without hardcoded IDs.
+
+### Remote state — `bootstrap/`
 
 - **Native S3 locking** (`use_lockfile`, Terraform ≥ 1.10). No DynamoDB table is needed.
 - **Versioned bucket**, so any state write can be rolled back. Old versions expire after 90 days.
@@ -51,7 +66,7 @@ shared and protected from concurrent runs.
 The bucket is created by `bootstrap/`, a small configuration that is applied once per
 account with local state, because the bucket has to exist before anything can store state in it.
 
-### Continuous integration
+### Continuous integration — `.github/workflows`
 
 Every push and pull request runs a GitHub Actions pipeline that checks the code without
 touching AWS. It needs no cloud credentials and has read-only repository permissions.
@@ -73,7 +88,8 @@ Superseded runs on the same branch are cancelled automatically.
 ├── environments/
 │   └── dev/            # Composes modules for the dev environment
 └── modules/
-    └── vpc/            # VPC, subnets, internet gateway, NAT, routing
+    ├── vpc/            # VPC, subnets, internet gateway, NAT, routing
+    └── web/            # ALB, security groups, IAM, launch template, Auto Scaling
 ```
 
 ## Usage
@@ -99,5 +115,23 @@ terraform plan
 terraform apply
 ```
 
-Without the NAT gateway, every resource in the `dev` environment is free. The state
-bucket costs a few cents a month.
+Open the `app_url` output after a couple of minutes, once the instances pass their health
+checks. Each response names the instance and Availability Zone that served it, so
+refreshing shows the load balancer distributing traffic across zones.
+
+**Shell access**
+
+```bash
+aws ssm start-session --target <instance-id>
+```
+
+This requires the AWS CLI Session Manager plugin.
+
+**Tear down**
+
+```bash
+terraform destroy
+```
+
+The NAT gateway, load balancer and instances are billed hourly. The state bucket is not
+affected by an environment's `destroy`.

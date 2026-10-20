@@ -42,6 +42,7 @@ jobs:
           - bootstrap
           - environments/dev
           - modules/vpc
+          - modules/web
     steps:
       - uses: actions/checkout@v4
 

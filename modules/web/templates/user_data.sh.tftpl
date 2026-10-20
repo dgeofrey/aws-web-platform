@@ -1,0 +1,28 @@
+#!/bin/bash
+set -euo pipefail
+
+dnf install -y nginx
+
+# IMDSv2: get a session token before reading instance metadata
+TOKEN=$(curl -sS -X PUT "http://169.254.169.254/latest/api/token" \
+  -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+INSTANCE_ID=$(curl -sS -H "X-aws-ec2-metadata-token: $TOKEN" \
+  http://169.254.169.254/latest/meta-data/instance-id)
+AZ=$(curl -sS -H "X-aws-ec2-metadata-token: $TOKEN" \
+  http://169.254.169.254/latest/meta-data/placement/availability-zone)
+
+cat > /usr/share/nginx/html/index.html <<HTML
+<!doctype html>
+<html>
+  <head><title>${app_name}</title></head>
+  <body>
+    <h1>${app_name}</h1>
+    <p>Served by $INSTANCE_ID in $AZ</p>
+  </body>
+</html>
+HTML
+
+# Lightweight endpoint for load balancer health checks
+echo "ok" > /usr/share/nginx/html/health
+
+systemctl enable --now nginx

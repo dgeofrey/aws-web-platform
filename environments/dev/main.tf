@@ -17,3 +17,19 @@ module "vpc" {
   enable_nat_gateway = var.enable_nat_gateway
   tags               = local.common_tags
 }
+
+module "web" {
+  source = "../../modules/web"
+
+  name               = local.name
+  vpc_id             = module.vpc.vpc_id
+  public_subnet_ids  = module.vpc.public_subnet_ids
+  private_subnet_ids = module.vpc.private_subnet_ids
+
+  instance_type    = var.instance_type
+  min_size         = var.min_size
+  desired_capacity = var.desired_capacity
+  max_size         = var.max_size
+
+  tags = local.common_tags
+}
