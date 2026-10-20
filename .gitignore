@@ -1,0 +1,23 @@
+# Terraform working directories and state
+**/.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+
+# Environment-specific values - examples are committed instead
+*.tfvars
+*.tfvars.json
+backend.hcl
+
+# Plan files can contain sensitive values
+*.tfplan
+tfplan
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Committed on purpose: .terraform.lock.hcl

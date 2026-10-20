@@ -1,0 +1,7 @@
+# Copy to terraform.tfvars (git-ignored) to override defaults.
+
+region   = "ca-central-1"
+vpc_cidr = "10.20.0.0/16"
+az_count = 2
+
+# enable_nat_gateway = true   # billed hourly
