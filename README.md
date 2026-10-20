@@ -1,5 +1,7 @@
 # AWS Web Platform — Terraform
 
+[![terraform-ci](https://github.com/GITHUB_USERNAME/aws-web-platform/actions/workflows/terraform-ci.yml/badge.svg)](https://github.com/GITHUB_USERNAME/aws-web-platform/actions/workflows/terraform-ci.yml)
+
 Terraform for a multi-AZ web platform on AWS, built from reusable modules with one thin
 composition per environment.
 
@@ -49,10 +51,24 @@ shared and protected from concurrent runs.
 The bucket is created by `bootstrap/`, a small configuration that is applied once per
 account with local state, because the bucket has to exist before anything can store state in it.
 
+### Continuous integration
+
+Every push and pull request runs a GitHub Actions pipeline that checks the code without
+touching AWS. It needs no cloud credentials and has read-only repository permissions.
+
+| Check | What it catches |
+|---|---|
+| `terraform fmt` | Inconsistent formatting |
+| `terraform validate` | Invalid syntax and broken references, for each root and module, run in parallel |
+| TFLint (recommended preset) | Unused variables, missing types or descriptions, missing version constraints, deprecated syntax |
+
+Superseded runs on the same branch are cancelled automatically.
+
 ## Repository layout
 
 ```
 .
+├── .github/workflows/  # CI: fmt, validate, TFLint
 ├── bootstrap/          # One-time: S3 bucket for remote state
 ├── environments/
 │   └── dev/            # Composes modules for the dev environment
