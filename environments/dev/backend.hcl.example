@@ -1,0 +1,8 @@
+# Copy to backend.hcl (git-ignored) and set `bucket` to the
+# `state_bucket` output from the bootstrap configuration.
+
+bucket       = "tfstate-123456789012-ca-central-1"
+key          = "aws-web-platform/dev/terraform.tfstate"
+region       = "ca-central-1"
+encrypt      = true
+use_lockfile = true
