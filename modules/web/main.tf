@@ -8,10 +8,96 @@ locals {
     for pair in setproduct(var.allowed_ingress_cidrs, local.listener_ports) :
     "${pair[0]}-${pair[1]}" => { cidr = pair[0], port = pair[1] }
   }
+
+  # Application artifact
+  app_enabled = var.app_source_dir != null
+  app_files   = local.app_enabled ? sort(tolist(fileset(var.app_source_dir, "**"))) : []
+
+  # Content hash of every app file. It's rendered into user data, so any change to the
+  # app produces a new launch template version, which triggers a rolling instance refresh.
+  app_version = local.app_enabled ? substr(sha1(join("", [
+    for f in local.app_files : "${f}:${filemd5("${var.app_source_dir}/${f}")}"
+  ])), 0, 12) : "placeholder"
+
+  mime_types = {
+    html = "text/html; charset=utf-8"
+    css  = "text/css; charset=utf-8"
+    js   = "application/javascript; charset=utf-8"
+    json = "application/json"
+    svg  = "image/svg+xml"
+    png  = "image/png"
+    jpg  = "image/jpeg"
+    jpeg = "image/jpeg"
+    gif  = "image/gif"
+    ico  = "image/x-icon"
+    webp = "image/webp"
+    txt  = "text/plain; charset=utf-8"
+  }
 }
+
+data "aws_region" "current" {}
 
 data "aws_ssm_parameter" "ami" {
   name = var.ami_ssm_parameter
+}
+
+# ---------------------------------------------------------------------------
+# Application artifact: a private S3 bucket the instances sync from at boot
+# ---------------------------------------------------------------------------
+
+resource "aws_s3_bucket" "app" {
+  count = local.app_enabled ? 1 : 0
+
+  bucket_prefix = "${var.name}-app-"
+
+  # Holds build artifacts only, which are always reproducible from the repo
+  force_destroy = true
+
+  tags = var.tags
+}
+
+resource "aws_s3_bucket_ownership_controls" "app" {
+  count = local.app_enabled ? 1 : 0
+
+  bucket = aws_s3_bucket.app[0].id
+
+  rule {
+    object_ownership = "BucketOwnerEnforced"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "app" {
+  count = local.app_enabled ? 1 : 0
+
+  bucket                  = aws_s3_bucket.app[0].id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "app" {
+  count = local.app_enabled ? 1 : 0
+
+  bucket = aws_s3_bucket.app[0].id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_object" "app" {
+  for_each = toset(local.app_files)
+
+  bucket       = aws_s3_bucket.app[0].id
+  key          = each.value
+  source       = "${var.app_source_dir}/${each.value}"
+  source_hash  = filemd5("${var.app_source_dir}/${each.value}")
+  content_type = lookup(local.mime_types, lower(reverse(split(".", each.value))[0]), "application/octet-stream")
+
+  tags = var.tags
 }
 
 # ---------------------------------------------------------------------------
@@ -108,6 +194,29 @@ resource "aws_iam_role_policy_attachment" "ssm_core" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
+# Read-only access to the application artifact bucket, and nothing else in S3
+data "aws_iam_policy_document" "app_artifact_read" {
+  count = local.app_enabled ? 1 : 0
+
+  statement {
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.app[0].arn]
+  }
+
+  statement {
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.app[0].arn}/*"]
+  }
+}
+
+resource "aws_iam_role_policy" "app_artifact_read" {
+  count = local.app_enabled ? 1 : 0
+
+  name   = "app-artifact-read"
+  role   = aws_iam_role.app.id
+  policy = data.aws_iam_policy_document.app_artifact_read[0].json
+}
+
 resource "aws_iam_instance_profile" "app" {
   name_prefix = "${var.name}-app-"
   role        = aws_iam_role.app.name
@@ -201,7 +310,10 @@ resource "aws_launch_template" "app" {
   update_default_version = true
 
   user_data = base64encode(templatefile("${path.module}/templates/user_data.sh.tftpl", {
-    app_name = var.name
+    app_name    = var.name
+    app_bucket  = local.app_enabled ? aws_s3_bucket.app[0].id : ""
+    app_version = local.app_version
+    region      = data.aws_region.current.region
   }))
 
   iam_instance_profile {
@@ -268,6 +380,12 @@ resource "aws_autoscaling_group" "app" {
     value               = "${var.name}-app"
     propagate_at_launch = true
   }
+
+  # Instances sync the app at boot, so the artifact and read permission must exist first
+  depends_on = [
+    aws_s3_object.app,
+    aws_iam_role_policy.app_artifact_read,
+  ]
 }
 
 resource "aws_autoscaling_policy" "cpu_target" {

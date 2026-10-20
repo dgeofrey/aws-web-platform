@@ -18,6 +18,16 @@ output "autoscaling_group_name" {
   value       = aws_autoscaling_group.app.name
 }
 
+output "app_version" {
+  description = "Content hash of the deployed application build."
+  value       = local.app_version
+}
+
+output "app_bucket_name" {
+  description = "S3 bucket holding the application artifact, or null when no app is deployed."
+  value       = local.app_enabled ? aws_s3_bucket.app[0].id : null
+}
+
 output "app_security_group_id" {
   description = "Security group attached to the application instances."
   value       = aws_security_group.app.id

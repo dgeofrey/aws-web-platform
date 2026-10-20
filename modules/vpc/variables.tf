@@ -31,6 +31,12 @@ variable "enable_nat_gateway" {
   default     = true
 }
 
+variable "enable_s3_gateway_endpoint" {
+  description = "Route private subnet traffic to S3 through a gateway endpoint (no charge) instead of the NAT gateway."
+  type        = bool
+  default     = true
+}
+
 variable "tags" {
   description = "Additional tags applied to all resources."
   type        = map(string)

@@ -31,5 +31,7 @@ module "web" {
   desired_capacity = var.desired_capacity
   max_size         = var.max_size
 
+  app_source_dir = "${path.module}/../../app"
+
   tags = local.common_tags
 }

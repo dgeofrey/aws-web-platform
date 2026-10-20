@@ -83,6 +83,12 @@ variable "alb_deletion_protection" {
   default     = false
 }
 
+variable "app_source_dir" {
+  description = "Local directory containing the static application to deploy. When null, instances serve a placeholder page."
+  type        = string
+  default     = null
+}
+
 variable "tags" {
   description = "Additional tags applied to all resources, including launched instances and volumes."
   type        = map(string)

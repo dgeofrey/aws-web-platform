@@ -3,6 +3,11 @@ output "app_url" {
   value       = module.web.app_url
 }
 
+output "app_version" {
+  description = "Content hash of the deployed application build."
+  value       = module.web.app_version
+}
+
 output "autoscaling_group_name" {
   description = "Name of the application Auto Scaling group."
   value       = module.web.autoscaling_group_name

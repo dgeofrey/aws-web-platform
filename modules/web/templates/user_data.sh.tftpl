@@ -1,6 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
+WEB_ROOT=/usr/share/nginx/html
+
 dnf install -y nginx
 
 # IMDSv2: get a session token before reading instance metadata
@@ -11,7 +13,23 @@ INSTANCE_ID=$(curl -sS -H "X-aws-ec2-metadata-token: $TOKEN" \
 AZ=$(curl -sS -H "X-aws-ec2-metadata-token: $TOKEN" \
   http://169.254.169.254/latest/meta-data/placement/availability-zone)
 
-cat > /usr/share/nginx/html/index.html <<HTML
+# Start from an empty web root so a failed deploy can't fall back to nginx's default page
+rm -rf "$WEB_ROOT"/*
+
+%{ if app_bucket != "" ~}
+# Deploy build ${app_version} from S3. Retries cover IAM permissions that are still propagating.
+for attempt in 1 2 3 4 5 6; do
+  if aws s3 sync "s3://${app_bucket}/" "$WEB_ROOT/" --region "${region}" --only-show-errors; then
+    break
+  fi
+  echo "S3 sync attempt $attempt failed, retrying in 10s"
+  sleep 10
+done
+
+# Fail the boot (and so the health check) if the app didn't arrive
+test -f "$WEB_ROOT/index.html"
+%{ else ~}
+cat > "$WEB_ROOT/index.html" <<HTML
 <!doctype html>
 <html>
   <head><title>${app_name}</title></head>
@@ -21,8 +39,14 @@ cat > /usr/share/nginx/html/index.html <<HTML
   </body>
 </html>
 HTML
+%{ endif ~}
+
+# Which instance, zone and build served the request (shown in the app footer)
+cat > "$WEB_ROOT/instance.json" <<JSON
+{"instance_id": "$INSTANCE_ID", "availability_zone": "$AZ", "app_version": "${app_version}"}
+JSON
 
 # Lightweight endpoint for load balancer health checks
-echo "ok" > /usr/share/nginx/html/health
+echo "ok" > "$WEB_ROOT/health"
 
 systemctl enable --now nginx
