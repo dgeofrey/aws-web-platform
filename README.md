@@ -117,28 +117,122 @@ Superseded runs on the same branch are cancelled automatically.
     └── web/            # ALB, security groups, IAM, artifact bucket, launch template, Auto Scaling
 ```
 
+## Prerequisites
+
+**Tools**
+
+| Tool | Version |
+|---|---|
+| [Terraform](https://developer.hashicorp.com/terraform/install) | ≥ 1.10 |
+| [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) | v2 |
+| [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) | Optional, for shell access |
+
+**AWS credentials**
+
+Configure credentials for the account you want to deploy into (`aws configure`, `aws login`
+or SSO), then confirm which account will be changed:
+
+```bash
+aws sts get-caller-identity
+```
+
+**IAM permissions**
+
+An administrator works. For a scoped deployment user, attach these AWS managed policies:
+
+| Policy | Used for |
+|---|---|
+| `AmazonVPCFullAccess` | VPC, subnets, routing, NAT gateway, S3 endpoint |
+| `AmazonEC2FullAccess` | Instances, launch templates, load balancer, Auto Scaling |
+| `AmazonS3FullAccess` | State bucket and application artifact bucket |
+| `AmazonSSMReadOnlyAccess` | Resolving the latest Amazon Linux AMI |
+
+Then add this inline policy, which lets Terraform create the instance role and profile but
+only under the `webplatform-` prefix:
+
+<details>
+<summary>Inline IAM policy</summary>
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ManageWebPlatformRolesAndProfiles",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole",
+        "iam:DeleteRole",
+        "iam:GetRole",
+        "iam:TagRole",
+        "iam:UntagRole",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:ListRolePolicies",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListInstanceProfilesForRole",
+        "iam:PutRolePolicy",
+        "iam:GetRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:AttachRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:PassRole",
+        "iam:CreateInstanceProfile",
+        "iam:DeleteInstanceProfile",
+        "iam:GetInstanceProfile",
+        "iam:TagInstanceProfile",
+        "iam:UntagInstanceProfile",
+        "iam:AddRoleToInstanceProfile",
+        "iam:RemoveRoleFromInstanceProfile"
+      ],
+      "Resource": [
+        "arn:aws:iam::*:role/webplatform-*",
+        "arn:aws:iam::*:instance-profile/webplatform-*"
+      ]
+    }
+  ]
+}
+```
+
+</details>
+
+**Cost**
+
+The dev environment runs a NAT gateway, a load balancer and two `t3.micro` instances, all
+billed hourly (roughly US$3–4 a day in `ca-central-1`). Destroy it when you're not using it.
+The state bucket costs a few cents a month.
+
+## Quick start
+
+Deploys everything into `ca-central-1` from a fresh clone. Run it in a Bash shell (Git Bash
+on Windows).
+
+```bash
+git clone https://github.com/GITHUB_USERNAME/aws-web-platform.git
+cd aws-web-platform
+
+# 1. State bucket (once per account)
+terraform -chdir=bootstrap init
+terraform -chdir=bootstrap apply
+
+# 2. Point the dev environment at the state bucket
+BUCKET=$(terraform -chdir=bootstrap output -raw state_bucket)
+sed "s/tfstate-123456789012-ca-central-1/$BUCKET/" \
+  environments/dev/backend.hcl.example > environments/dev/backend.hcl
+
+# 3. Deploy the platform and the app
+terraform -chdir=environments/dev init -backend-config=backend.hcl
+terraform -chdir=environments/dev apply
+
+terraform -chdir=environments/dev output app_url
+```
+
+To deploy somewhere other than `ca-central-1`, set `region` in `bootstrap/variables.tf`,
+`environments/dev/backend.hcl` and `environments/dev/terraform.tfvars` (copied from
+`terraform.tfvars.example`).
+
 ## Usage
 
-Requires Terraform ≥ 1.10 and AWS credentials for the target account.
-
-**1. Create the state bucket (once per account)**
-
-```bash
-cd bootstrap
-terraform init
-terraform apply
-```
-
-**2. Deploy an environment**
-
-```bash
-cd environments/dev
-cp backend.hcl.example backend.hcl            # set bucket to the bootstrap output
-cp terraform.tfvars.example terraform.tfvars
-terraform init -backend-config=backend.hcl
-terraform plan
-terraform apply
-```
+Run these from `environments/dev`.
 
 Open the `app_url` output after a couple of minutes, once the instances pass their health
 checks. The game's footer names the instance, Availability Zone and build that served it.
@@ -170,3 +264,12 @@ terraform destroy
 
 The NAT gateway, load balancer and instances are billed hourly. The state bucket is not
 affected by an environment's `destroy`.
+
+## Troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| `Access denied when attempting to assume role ... AWSServiceRoleForAutoScaling` on the first apply | The account's first Auto Scaling group creates this service-linked role, which takes a moment to propagate. Wait a minute and run `terraform apply` again. |
+| `502` or `503` from the load balancer right after apply | Instances are still booting. Wait 2–3 minutes for them to pass health checks. |
+| Old version still showing after deploying a change | The instance refresh is still rolling out. Check **EC2 → Auto Scaling groups → Instance refresh**. |
+| `AccessDenied` on IAM, S3 or EC2 actions | The deploying user is missing a permission from [Prerequisites](#prerequisites). |
